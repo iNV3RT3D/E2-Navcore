@@ -182,16 +182,30 @@ function NavCore.ToClose(point, tocheck, self) --check if a vector is to close t
 end
 
 function NavCore.PathToVectorNearest(path, removepoint, start, goal, self) --Gets all navareas in a table and converts to a table of vectors of nearest point within bounds
+	local prop = self.data.navprop
+	
 	local returntable = {}
+	local point
+	local point2
 	for i, area in pairs( path ) do
-		local point
+		local p2exist
+		local p1exist
 		if((i+1)<=#path)then
-			point2 = NavCore.GetNearestPointBounds(area, path[i+1]:GetCenter(), FollowerSize/2)
+			p2exist = area:GetClosestPointOnArea(path[i+1]:GetCenter())
+			p2exist = (p2exist+path[i+1]:GetClosestPointOnArea(area:GetCenter()))/2
+		end
+		if((i-1)>0)then
+			p1exist = area:GetClosestPointOnArea(path[i-1]:GetCenter())
+			p1exist = (p1exist+path[i-1]:GetClosestPointOnArea(area:GetCenter()))/2
+		end
+		
+		if((i+1)<=#path)then
+			point2 = NavCore.GetNearestPointBounds(area, p2exist, prop.FollowerSize/2)
 		else
 			point2 = nil
 		end
 		if((i-1)>0)then
-			point = NavCore.GetNearestPointBounds(area, path[i-1]:GetCenter(), FollowerSize/2)
+			point = NavCore.GetNearestPointBounds(area, p1exist, prop.FollowerSize/2)
 		else
 			point = area:GetCenter()
 		end
@@ -207,7 +221,7 @@ function NavCore.PathToVectorNearest(path, removepoint, start, goal, self) --Get
 			table.insert(returntable, point2)
 		end
     end
-    return returntable
+    return table.Reverse(returntable)
 end
 
 function NavCore.NavareaMeetsRequirements(navarea, self) --Checks if navarea has enough space for a follower to get through, as well as isn't to steep
