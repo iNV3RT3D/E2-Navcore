@@ -10,7 +10,7 @@ local SlopeLimit = 30
 local FollowerSize = 22
 local FollowerHeight = 50
 local RemoveDist = 22
-local CheckAreaLimit = CreateConVar( "navcore_areachecklimit", "5000", FCVAR_ARCHIVE, "How many areas a pathfind is able to check without finding the goal before using what it has", 0 )
+local CheckAreaLimit = CreateConVar( "navcore_areachecklimit", "5000", FCVAR_ARCHIVE, "How many areas a pathfind is able to check without finding the goal before using what it has thus far", 0 )
 local CheckRateLimit = CreateConVar( "navcore_pathfindratelimit", "0.3", FCVAR_ARCHIVE, "How quickly a player can run pathfinding functions", 0 )
 
 local LastPathing = WireLib.RegisterPlayerTable()
@@ -403,7 +403,7 @@ e2function array navGenPathSimple(vector startpos, vector goalpos)
 		self.data.PrevPath = self.data.PrevPath or {}
 		
 		NavCore.CanRunAstarUpdate( self.player )
-		Path = NavCore.Astar( self, navstart, navgoal, filter )
+		local Path = NavCore.Astar( self, navstart, navgoal, filter )
 		
 		if(Path == true)then
 			self.data.PrevPath = {goalpos}
