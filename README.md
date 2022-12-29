@@ -1,2 +1,2 @@
 # E2-Navcore
-Adds pathfinding to wiremod's E2 
+Adds pathfinding, using my Pathfinders base, to wiremod's E2 
