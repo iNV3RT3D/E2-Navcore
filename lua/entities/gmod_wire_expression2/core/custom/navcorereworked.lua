@@ -10,130 +10,24 @@ local SlopeLimit = 30
 local FollowerSize = 22
 local FollowerHeight = 50
 local RemoveDist = 22
-local CheckAreaLimit = CreateConVar( "navcore_areachecklimit", "5000", FCVAR_ARCHIVE, "How many areas a pathfind is able to check without finding the goal before using what it has thus far", 0 )
-local CheckRateLimit = CreateConVar( "navcore_pathfindratelimit", "0.3", FCVAR_ARCHIVE, "How quickly a player can run pathfinding functions", 0 )
+local StepsMaxAmount = CreateConVar( "navcore_stepsmax", "20", FCVAR_ARCHIVE, "The max amount of steps allowed per tick", 0 )
 
-local LastPathing = WireLib.RegisterPlayerTable()
+NavCore.CurrentPathing = nil
 
---Below commented areas was for a built in queueing system, as the pathfind rate limit is shared for all E2s of a player. However having people coding their own within E2 might work out better.
---I might add back in if people find it necessary
+local lastStepInterval = CurTime()
+local StepsAvailable = WireLib.RegisterPlayerTable()
 
---local PlayerE2PathingQueue = WireLib.RegisterPlayerTable()
-
-function NavCore.CanRunAstar( player, self ) --Check if it hasn't been to soon since the previous pathfind
-	local cur, last = CurTime(), LastPathing[player] or 0
-	if((cur-last)<CheckRateLimit:GetFloat())then return false end
-	--if(PlayerE2PathingQueue[1] != self.entity)then return false end
-	--table.remove( PlayerE2PathingQueue, 1 )
-	--table.insert( PlayerE2PathingQueue, self.entity )
-	return true
-end
-
-function NavCore.CanRunAstarUpdate( player ) --Set the time since last pathfind to now
-	LastPathing[player] = CurTime()
-end
-
-function NavCore.Astar( self, start, goal ) --Main portion of pathfinding code
-	if( !IsValid(start)||!IsValid(goal) ) then return false end
-	if( start == goal ) then return true end
-	
-	start:ClearSearchLists()
-	
-	start:AddToOpenList()
-	
-	local Closest = start
-	
-	local cameFrom = {}
-	
-	start:SetCostSoFar( 0 )
-	start:SetTotalCost( NavCore.h_cost_estimate(start, goal) )
-	start:UpdateOnOpenList()
-	
-	local checkedareas = 0
-	local validitychecks = 0
-	
-	while( !start:IsOpenListEmpty() ) do
-		local current = start:PopOpenList()
-		
-		if(current == goal) then
-			return NavCore.reconstruct_path(cameFrom, current, self)
-		end
-		
-		current:AddToClosedList()
-		
-		if(checkedareas>CheckAreaLimit:GetInt())then
-			return NavCore.reconstruct_path(cameFrom, Closest, self)
-		end
-		
-		if(self.data.BadAreas[current:GetID()])then
-			continue
-		end
-		
-		if(!self.data.GoodAreas[current:GetID()])then
-			if(validitychecks<3)then
-				if(!NavCore.NavareaMeetsRequirements(current, self))then
-					self.data.BadAreas[current:GetID()] = true
-					continue
-				else
-					self.data.GoodAreas[current:GetID()] = true
-				end
-				validitychecks = validitychecks + 1
-			end
-		end
-		
-		for k, neighbor in pairs( current:GetAdjacentAreas() ) do
-			local newCostSoFar = current:GetCostSoFar() + NavCore.h_cost_estimate( current, neighbor ) + 200 --The extra value is make paths with large amounts of navareas less perferable, usually choosing a path further from limit
-			
-			checkedareas = checkedareas + 1
-			if(!NavCore.NavareaNeighborChecks(current, neighbor, self))then
-				continue
-			end
-			
-			if( ( neighbor:IsOpen() || neighbor:IsClosed() ) && (neighbor:GetCostSoFar() <= newCostSoFar) ) then
-				continue
-			else
-				neighbor:SetCostSoFar( newCostSoFar )
-				neighbor:SetTotalCost( newCostSoFar + NavCore.h_cost_estimate( neighbor, goal ) )
-				
-				if( neighbor:IsClosed() )then
-					neighbor:RemoveFromClosedList()
-				end
-				
-				if(neighbor:IsOpen())then
-					neighbor:UpdateOnOpenList()
-				else
-					neighbor:AddToOpenList()
-				end
-				
-				if((Closest:GetCenter():DistToSqr(goal:GetCenter()))>(neighbor:GetCenter():DistToSqr(goal:GetCenter())))then
-					Closest = neighbor
-				end
-				
-				cameFrom[neighbor:GetID()] = current:GetID()
-			end
-		end
+hook.Add("Think", "ResetSteps", function()
+	for I, P in ipairs(player.GetAll()) do
+		StepsAvailable[P] = StepsMaxAmount:GetInt()
 	end
-	
-	return false
-	
-end
+end)
 
-function NavCore.h_cost_estimate(first, second)
-	return first:GetCenter():Distance(second:GetCenter())
-end
-
-function NavCore.reconstruct_path(from, start, self) --Rebuild path from the last area backwards
-	local total_path = { start }
-	
-	local current = start:GetID()
-	while ( from[current] ) do
-		current = from[ current ]
-		if(!NavCore.NavareaMeetsRequirements(navmesh.GetNavAreaByID( current ), self))then
-			self.data.BadAreas[current] = true
-		end
-		table.insert( total_path, navmesh.GetNavAreaByID( current ) )
-	end
-	return total_path
+function NavCore.UseSteps(player, steps)
+	local availablesteps = StepsAvailable[player]
+	local clamped = math.Clamp(availablesteps, 0, steps)
+	StepsAvailable[player] = StepsAvailable[player] - clamped
+	return clamped
 end
 
 function NavCore.PathToVector(path) --Gets all navareas in a table and converts to a table of vectors of each areas center
@@ -225,28 +119,29 @@ function NavCore.PathToVectorNearest(path, removepoint, start, goal, self) --Get
 end
 
 function NavCore.NavareaMeetsRequirements(navarea, self) --Checks if navarea has enough space for a follower to get through, as well as isn't to steep
-
 	local prop = self.data.navprop
 	
 	local tr = util.TraceLine( {
-		start = navarea:GetCenter()+Vector(0,0,20),
-		endpos = navarea:GetCenter()-Vector(0,0,20),
-		mask = MASK_PLAYERSOLID_BRUSHONLY
+		start = navarea:GetCenter()+Vector(0,0,100),
+		endpos = navarea:GetCenter()-Vector(0,0,100),
+		mask = MASK_PLAYERSOLID_BRUSHONLY	
 	} )
+	
+	if(tr.Hit)then
+		if ( tr.HitNormal.z<((90-prop.SlopeLimit)/90) ) then
+			return false
+		end
+	end
 	
 	local trh = util.TraceHull( {
 		start = navarea:GetCenter()+Vector(0,0,prop.StepHeight*2),
 		endpos = navarea:GetCenter()+Vector(0,0,prop.FollowerHeight),
 		maxs = Vector(prop.FollowerSize,prop.FollowerSize,1)/2,
 		mins = -Vector(prop.FollowerSize,prop.FollowerSize,1)/2,
-		mask = MASK_PLAYERSOLID_BRUSHONLY
+		mask = MASK_PLAYERSOLID_BRUSHONLY	
 	} )
 		
 	if ( trh.Hit || trh.StartSolid ) then
-		return false
-	end
-	
-	if ( tr.HitNormal.z<((90-prop.SlopeLimit)/90) ) then
 		return false
 	end
 	
@@ -255,17 +150,27 @@ end
 
 function NavCore.NavareaNeighborChecks(current, neighbor, self) --Some of the less intense neighbor checks relating to step and fall heights
 	
+	local att = neighbor:GetAttributes()
+	
 	local prop = self.data.navprop
 
 	local curpos = current:GetClosestPointOnArea(neighbor:GetCenter())
 	local neipos = neighbor:GetClosestPointOnArea(current:GetCenter())
 	
-	if((curpos.z-neipos.z)>prop.FallHeight)then
-		return false
+	if(!neighbor:HasAttributes( NAV_MESH_STAIRS ) or !current:HasAttributes( NAV_MESH_STAIRS ))then
+		if((curpos.z-neipos.z)>prop.FallHeight)then
+			return false
+		end
+		if((neipos.z-curpos.z)>prop.StepHeight)then
+			return false
+		end
 	end
-	if((neipos.z-curpos.z)>prop.StepHeight)then
-		return false
-	end
+	return true
+end
+
+function NavCore.SharedCheck(current, neighbor, params)
+	if !NavCore.NavareaNeighborChecks(current, neighbor, params.self) then return false end
+	if !NavCore.NavareaMeetsRequirements(neighbor, params.self) then return false end
 	return true
 end
 
@@ -278,7 +183,7 @@ function NavCore.FindNearestValidArea(Pos, Range, Maxup, Maxdown, self) --Check 
 		local closestpoint = v:GetClosestPointOnArea( Pos )
 		
 		if(closestpoint:DistToSqr( Pos )<Dist)then
-			if(NavCore.NavareaMeetsRequirements(v, self))then
+			if(NavCore.NavareaMeetsRequirements(v, self ))then
 				Dist = closestpoint:DistToSqr( Pos )
 				Nearest = v
 			end
@@ -309,11 +214,49 @@ function NavCore.IsCNavArea(possible) --Is this value a CNavArea
 	end
 end
 
-__e2setcost(1)
-e2function number navCanPathFind()
-	return NavCore.CanRunAstar( self.player, self )
+e2function number navarea:isValid()
+	return IsValid(this) and 1 or 0
 end
 
+registerType("navarea", "xna", nil, 
+	nil,
+	nil,
+	function(ret)
+		if not ret then return end
+		if not NavCore.IsCNavArea(ret) then throw("Somehow xna is type: ", type(ret)) end
+	end,
+	function(xna)
+		return NavCore.IsCNavArea(xna)
+	end
+)
+
+registerType("pather", "xpa", nil, 
+	nil,
+	nil,
+	function(ret)
+		if not ret then return end
+		if not NavCore.IsCNavArea(ret) then throw("Somehow xpa is type: ", type(ret)) end
+	end,
+	function(xpa)
+		return NavCore.IsCNavArea(xpa)
+	end
+)
+
+e2function navarea operator=(navarea lhs, navarea rhs)
+	local scope = self.Scopes[ args[4] ]
+	scope[lhs] = rhs
+	scope.vclk[lhs] = true
+	return rhs
+end
+
+e2function pather operator=(pather lhs, pather rhs)
+	local scope = self.Scopes[ args[4] ]
+	scope[lhs] = rhs
+	scope.vclk[lhs] = true
+	return rhs
+end
+
+__e2setcost(1)
 e2function void navSetStepHeight(number height)
 	NavCore.CheckNavProperties( self )
 	self.data.navprop.StepHeight = height
@@ -349,29 +292,6 @@ e2function void navSetNextPointDist(number range)
 	self.data.navprop.RemoveDist = range
 end
 
-e2function number navarea:isValid()
-	return IsValid(this) and 1 or 0
-end
-
-registerType("navarea", "xna", nil, 
-	nil,
-	nil,
-	function(ret)
-		if not ret then return end
-		if not NavCore.IsCNavArea(ret) then throw("Somehow xna is type: ", type(ret)) end
-	end,
-	function(xna)
-		return NavCore.IsCNavArea(xna)
-	end
-)
-
-e2function navarea operator=(navarea lhs, navarea rhs)
-	local scope = self.Scopes[ args[4] ]
-	scope[lhs] = rhs
-	scope.vclk[lhs] = true
-	return rhs
-end
-
 __e2setcost(10)
 e2function navarea navFindNearestNavArea(vector findfrom)
 	return navmesh.GetNearestNavArea( findfrom )
@@ -389,52 +309,43 @@ e2function vector navarea:navAreaGetClosestPoint(vector to)
 	return this:GetClosestPointOnArea( to )
 end
 
-__e2setcost(500)
-e2function array navGenPathSimple(vector startpos, vector goalpos)
-	if(NavCore.CanRunAstar(self.player, self))then
-		local startvec = Vector(startpos[1],startpos[2],startpos[3])
-		local goalvec = Vector(goalpos[1],goalpos[2],goalpos[3])
-		
-		if(startvec == nil)then
-			local startvec = startpos
-		end
-		if(goalvec == nil)then
-			local goalvec = goalpos
-		end
-		
-		local start = startvec
-		
-		NavCore.CheckNavProperties( self )
-		
-		local goal = goalvec
 
-		local navstart = NavCore.FindNearestValidArea( start, 3000, StepHeight, FallHeight, self )
-		local navgoal = NavCore.FindNearestValidArea( goal, 3000, StepHeight, FallHeight, self )
-		
-		self.data.BadAreas = self.data.BadAreas or {}
-		self.data.GoodAreas = self.data.GoodAreas or {}
-		
-		self.data.PrevPath = self.data.PrevPath or {}
-		
-		NavCore.CanRunAstarUpdate( self.player )
-		local Path = NavCore.Astar( self, navstart, navgoal, filter )
-		
-		if(Path == true)then
-			self.data.PrevPath = {goalpos}
-			return {goalpos}
-		end
-		if(Path == false)then
-			return {}
-		end
-		
-		Path = NavCore.PathToVectorNearest(Path, start, start, goal, self )
-		self.data.PrevPath = Path
+__e2setcost(20)
+e2function number navBeginPathSimple(vector start, vector goal)
+	self.pather = Pathfind.CreateNavmeshPathfinder()
+
+	self.pather.StartVec = start
+	self.pather.GoalVec = goal
+	local startarea = NavCore.FindNearestValidArea(start, 3000, 3000, 3000, self)
+	local endarea = NavCore.FindNearestValidArea(goal, 3000, 3000, 3000, self)
+	if(IsValid(startarea) and IsValid(endarea))then
+		self.pather:PathFindBegin(startarea, endarea)
+		return 1
 	end
-	
-	if(self.data.PrevPath)then
-		return self.data.PrevPath
+	return 0
+end
+--local pather = Pathfind.CreateNavmeshPathfinder()
+__e2setcost(50)
+e2function string navPathStepSimple(number steps)
+	--local usesteps = NavCore.UseSteps( self.player, steps )
+	--print(usesteps)
+	local state = self.pather:PathFindStep(NavCore.UseSteps(self.player, steps), NavCore.SharedCheck, {self = self})
+	return state or "In Progress"
+end
+
+e2function array navReturnPathSimple()
+	local Path = self.pather.Path
+	--NavCore.PathToVectorNearest(path, removepoint, start, goal, self)
+	--function NavCore.PathToVectorNearest(path, removepoint, self)
+	if(#Path == 1)then 
+		if(self.pather.GoalVec)then
+			return {self.pather.GoalVec} 
+		else
+			return {Path[1]:GetCenter()} 
+		end
 	end
-	return {}
+	Path = NavCore.PathToVectorNearest(Path, Path[1]:GetCenter(), Path[1]:GetCenter(), Path[#Path]:GetCenter(), self )
+	return Path
 end
 
 registerCallback("construct",
