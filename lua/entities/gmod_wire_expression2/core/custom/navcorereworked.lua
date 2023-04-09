@@ -38,6 +38,56 @@ function NavCore.PathToVector(path) --Gets all navareas in a table and converts 
     return returntable
 end
 
+function NavCore.InitializeNavPathfinder(pather, startarea, endarea, prop)
+	
+	local ValidCheck = function(area, secarea)
+		area = navmesh.GetNavAreaByID(area)
+		secarea = navmesh.GetNavAreaByID(secarea)
+		
+		--close_area = area:GetClosestPointOnArea( secarea:GetCenter() )
+		--close_secarea = secarea:GetClosestPointOnArea( area:GetCenter() )
+		
+
+		
+		if (area:ComputeAdjacentConnectionHeightChange( secarea ) > prop.StepHeight) or (area:ComputeAdjacentConnectionHeightChange( secarea ) < -prop.FallHeight) then
+			return false
+		end
+		
+		local dt = {start = secarea:GetCenter()+Vector(0,0,10), endpos = secarea:GetCenter()+Vector(0,0,prop.FollowerHeight), collisiongroup = COLLISION_GROUP_WORLD}
+		local trace = util.TraceLine( dt )
+		if trace.HitWorld then
+			return false
+		end
+		
+		dt = {start = secarea:GetCenter()+Vector(0,0,prop.FollowerHeight), endpos = secarea:GetCenter()+Vector(0,0,-50), collisiongroup = COLLISION_GROUP_WORLD}
+		trace = util.TraceLine( dt )
+		local hitang = trace.HitNormal:Angle()
+		hitang.pitch = math.NormalizeAngle(hitang.pitch+90)
+		if math.abs(hitang.pitch) > prop.SlopeLimit then
+			return false
+		end
+		
+		dt = {start = secarea:GetCenter()+Vector(0,0,prop.FollowerHeight/2), endpos = secarea:GetCenter()+Vector(0,0,prop.FollowerHeight/2), maxs = Vector(prop.FollowerSize,prop.FollowerSize,1), mins = -Vector(prop.FollowerSize,prop.FollowerSize,1), collisiongroup = COLLISION_GROUP_WORLD}
+		
+		--[[
+		local traces = 0
+		local maxtraces = 8
+		while traces<maxtraces do
+			dt = {start = secarea:GetCenter()+Vector(0,0,prop.FollowerHeight/2), endpos = secarea:GetCenter()+Vector(0,0,prop.FollowerHeight/2)+Angle(0,360/maxtraces*traces,0):Forward()*FollowerSize}
+			trace = util.TraceLine( dt )
+			
+			traces = traces + 1
+			
+			if(trace.HitWorld) then return false end
+		end
+		]]--
+		
+		return true
+	end
+
+	Finders:NavInitialize(pather, startarea, endarea, ValidCheck, nil, nil)
+end
+
 function NavCore.GetNearestPointBounds(navarea,vector,dist) --gets closest point on area that has a distance from the edges
 	local MaxBounds = navarea:GetCenter()+Vector(navarea:GetSizeX()/2-dist,navarea:GetSizeY()/2-dist,200)
 	local MinBounds = navarea:GetCenter()-Vector(navarea:GetSizeX()/2-dist,navarea:GetSizeY()/2-dist,-200)
@@ -77,6 +127,8 @@ end
 
 function NavCore.PathToVectorNearest(path, removepoint, start, goal, self) --Gets all navareas in a table and converts to a table of vectors of nearest point within bounds
 	local prop = self.data.navprop
+	
+	local path = table.Reverse(path)
 	
 	local returntable = {}
 	local point
@@ -312,14 +364,16 @@ end
 
 __e2setcost(20)
 e2function number navBeginPathSimple(vector start, vector goal)
-	self.pather = Pathfind.CreateNavmeshPathfinder()
-
-	self.pather.StartVec = start
-	self.pather.GoalVec = goal
+	self.pather = Pathfind:CreatePathfinder()
+	
 	local startarea = NavCore.FindNearestValidArea(start, 3000, 3000, 3000, self)
 	local endarea = NavCore.FindNearestValidArea(goal, 3000, 3000, 3000, self)
 	if(IsValid(startarea) and IsValid(endarea))then
-		self.pather:PathFindBegin(startarea, endarea)
+		--self.pather:PathFindBegin(startarea, endarea)
+		local prop = self.data.navprop
+		
+		NavCore.InitializeNavPathfinder(self.pather, startarea, endarea, prop)
+
 		return 1
 	end
 	return 0
@@ -327,10 +381,25 @@ end
 --local pather = Pathfind.CreateNavmeshPathfinder()
 __e2setcost(50)
 e2function string navPathStepSimple(number steps)
-	--local usesteps = NavCore.UseSteps( self.player, steps )
-	--print(usesteps)
-	local state = self.pather:PathFindStep(NavCore.UseSteps(self.player, steps), NavCore.SharedCheck, {self = self})
-	return state or "In Progress"
+	local usesteps = NavCore.UseSteps( self.player, steps )
+
+	local state = self.pather:Step(usesteps)
+
+	if state == true then return "Complete" end
+	if state == false then return "Failed" end
+	if(!self.pather.Pathing) then return "Not Pathing" end
+	return "In Progress"
+end
+
+__e2setcost(20)
+e2function number navPathAreasChecked()
+	if !(self.pather) then return -1 end
+	return self.pather.Checked
+end
+
+__e2setcost(20)
+e2function number navTotalAreas()
+	return navmesh.GetNavAreaCount()
 end
 
 e2function array navReturnPathSimple()
@@ -344,8 +413,9 @@ e2function array navReturnPathSimple()
 			return {Path[1]:GetCenter()} 
 		end
 	end
-	Path = NavCore.PathToVectorNearest(Path, Path[1]:GetCenter(), Path[1]:GetCenter(), Path[#Path]:GetCenter(), self )
-	return Path
+	local RPath = table.Reverse(Path)
+	RPath = NavCore.PathToVectorNearest(RPath, RPath[1]:GetCenter(), RPath[1]:GetCenter(), RPath[#RPath]:GetCenter(), self )
+	return RPath
 end
 
 registerCallback("construct",
