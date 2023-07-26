@@ -1,7 +1,5 @@
 E2Lib.RegisterExtension("ReworkedNavcore", false, "Add various functions for pathfinding relating to navmeshes", "Players generating complex navmeshes without command console restrictions set can lag the server, default restrictions should work fine")
 
---local sbox_E2_Navcore = CreateConVar("sbox_E2_Navcore", "2", FCVAR_ARCHIVE)
-
 NavCore = {}
 
 local StepHeight = 18
@@ -47,19 +45,17 @@ function NavCore.InitializeNavPathfinder(pather, startarea, endarea, prop)
 		--close_area = area:GetClosestPointOnArea( secarea:GetCenter() )
 		--close_secarea = secarea:GetClosestPointOnArea( area:GetCenter() )
 		
-
-		
 		if (area:ComputeAdjacentConnectionHeightChange( secarea ) > prop.StepHeight) or (area:ComputeAdjacentConnectionHeightChange( secarea ) < -prop.FallHeight) then
 			return false
 		end
 		
-		local dt = {start = secarea:GetCenter()+Vector(0,0,10), endpos = secarea:GetCenter()+Vector(0,0,prop.FollowerHeight), collisiongroup = COLLISION_GROUP_WORLD}
+		local dt = {start = secarea:GetCenter()+Vector(0,0,10), endpos = secarea:GetCenter()+Vector(0,0,prop.FollowerHeight), collisiongroup = COLLISION_GROUP_DEBRIS}
 		local trace = util.TraceLine( dt )
-		if trace.HitWorld then
+		if trace.Hit then
 			return false
 		end
 		
-		dt = {start = secarea:GetCenter()+Vector(0,0,prop.FollowerHeight), endpos = secarea:GetCenter()+Vector(0,0,-50), collisiongroup = COLLISION_GROUP_WORLD}
+		dt = {start = secarea:GetCenter()+Vector(0,0,prop.FollowerHeight), endpos = secarea:GetCenter()+Vector(0,0,-50), collisiongroup = COLLISION_GROUP_DEBRIS}
 		trace = util.TraceLine( dt )
 		local hitang = trace.HitNormal:Angle()
 		hitang.pitch = math.NormalizeAngle(hitang.pitch+90)
@@ -67,7 +63,12 @@ function NavCore.InitializeNavPathfinder(pather, startarea, endarea, prop)
 			return false
 		end
 		
-		dt = {start = secarea:GetCenter()+Vector(0,0,prop.FollowerHeight/2), endpos = secarea:GetCenter()+Vector(0,0,prop.FollowerHeight/2), maxs = Vector(prop.FollowerSize,prop.FollowerSize,1), mins = -Vector(prop.FollowerSize,prop.FollowerSize,1), collisiongroup = COLLISION_GROUP_WORLD}
+		dt = {start = secarea:GetCenter()+Vector(0,0,prop.FollowerHeight/2), endpos = secarea:GetCenter()+Vector(0,0,prop.FollowerHeight/2), maxs = Vector(prop.FollowerSize,prop.FollowerSize,1), mins = -Vector(prop.FollowerSize,prop.FollowerSize,1), collisiongroup = COLLISION_GROUP_DEBRIS}
+		trace = util.TraceHull( dt )
+		
+		if(trace.Hit)then
+			return false
+		end
 		
 		--[[
 		local traces = 0
@@ -95,8 +96,6 @@ function NavCore.GetNearestPointBounds(navarea,vector,dist) --gets closest point
 	
 	local X = math.Clamp( Closest.x, MinBounds.x, MaxBounds.x )
 	local Y = math.Clamp( Closest.y, MinBounds.y, MaxBounds.y )
-	
-	local aim = Entity( 1 ):GetEyeTrace().HitPos
 	
 	if((navarea:GetSizeX()/2<dist))then
 		X = navarea:GetCenter().x
@@ -406,6 +405,7 @@ e2function array navReturnPathSimple()
 	local Path = self.pather.Path
 	--NavCore.PathToVectorNearest(path, removepoint, start, goal, self)
 	--function NavCore.PathToVectorNearest(path, removepoint, self)
+	if !Path or #Path == 0 then return {} end
 	if(#Path == 1)then 
 		if(self.pather.GoalVec)then
 			return {self.pather.GoalVec} 
